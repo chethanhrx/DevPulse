@@ -4,19 +4,31 @@ import { ErrorState } from './ErrorState';
 
 export function ApiStatus({ status, error, onRetry, children }) {
   if (status === 'idle') {
-    return null; // Or some idle state, but usually handled by parent
+    return null;
   }
 
   if (status === 'loading') {
-    return <LoadingSkeleton />;
+    return (
+      <div className="animate-fade-in">
+        <LoadingSkeleton />
+      </div>
+    );
   }
 
   if (status === 'error') {
-    return <ErrorState message={error} onRetry={onRetry} />;
+    return (
+      <div className="animate-fade-in">
+        <ErrorState message={error} onRetry={onRetry} />
+      </div>
+    );
   }
 
   if (status === 'success') {
-    return children;
+    return (
+      <div className="animate-slide-up">
+        {children}
+      </div>
+    );
   }
 
   return null;

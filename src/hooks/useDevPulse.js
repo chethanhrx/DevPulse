@@ -3,6 +3,8 @@ import { fetchGithubData } from '../api/github';
 import { fetchStackExchangeData } from '../api/stackexchange';
 import { fetchHackerNewsData } from '../api/hackernews';
 
+const REQUEST_TIMEOUT = 15000; // 15 seconds
+
 const initialState = {
   github: { status: 'idle', data: null, error: null },
   stackOverflow: { status: 'idle', data: null, error: null },
@@ -33,6 +35,28 @@ function reducer(state, action) {
   }
 }
 
+function withTimeout(promise, signal, timeoutMs = REQUEST_TIMEOUT) {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error('Request timed out. Please try again.'));
+    }, timeoutMs);
+
+    promise
+      .then((result) => {
+        clearTimeout(timeoutId);
+        if (signal.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'));
+        } else {
+          resolve(result);
+        }
+      })
+      .catch((error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      });
+  });
+}
+
 export function useDevPulse() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const abortControllers = useRef({
@@ -47,17 +71,33 @@ export function useDevPulse() {
     if (abortControllers.current[source]) {
       abortControllers.current[source].abort();
     }
+
     const controller = new AbortController();
     abortControllers.current[source] = controller;
 
     dispatch({ type: 'FETCH_START', source });
+
     try {
-      const data = await fetchFn(query, controller.signal);
+      const data = await withTimeout(
+        fetchFn(query, controller.signal),
+        controller.signal
+      );
       dispatch({ type: 'FETCH_SUCCESS', source, payload: data });
     } catch (error) {
       if (error.name === 'AbortError') return; // Ignore aborts
-      
-      const errorMessage = error.message || 'An unexpected error occurred';
+
+      let errorMessage = 'An unexpected error occurred';
+
+      if (error.message === 'Request timed out. Please try again.') {
+        errorMessage = error.message;
+      } else if (error.status === 403 || error.status === 429) {
+        errorMessage = error.message || 'API rate limit exceeded. Please wait and try again.';
+      } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        errorMessage = 'Network error. Please check your connection.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
       dispatch({ type: 'FETCH_ERROR', source, payload: errorMessage });
     }
   }, []);
@@ -65,21 +105,21 @@ export function useDevPulse() {
   const search = useCallback((query) => {
     if (!query.trim()) return;
     currentQuery.current = query;
-    
+
     const requests = [
       fetchSource('github', query, fetchGithubData),
       fetchSource('stackOverflow', query, fetchStackExchangeData),
       fetchSource('hackerNews', query, fetchHackerNewsData)
     ];
-    
-    // Using Promise.allSettled as specified to run in parallel
+
+    // Using Promise.allSettled to run in parallel - no single failure stops others
     Promise.allSettled(requests);
   }, [fetchSource]);
 
   const retry = useCallback((source) => {
     if (!currentQuery.current) return;
-    
-    switch(source) {
+
+    switch (source) {
       case 'github':
         fetchSource('github', currentQuery.current, fetchGithubData);
         break;
